@@ -106,3 +106,61 @@ async fn search_preset_watch_poll() {
     assert!(b.at_current.exempt);
     assert_eq!(b.at_my_max.hammer_gbp, 30.0);
 }
+
+/// Site account sync: cookie + X-Auctioneer-Wa-Id reach the site, bids and bookmarks land in the watchlist.
+#[tokio::test]
+async fn account_sync_imports_bids_and_bookmarks() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let reqs: Arc<Mutex<Vec<String>>> = Arc::default();
+    let reqs2 = reqs.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let reqs = reqs2.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 8192];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+                reqs.lock().unwrap().push(req.clone());
+                let route = req.split_whitespace().nth(1).unwrap_or("/").split('?').next().unwrap().to_string();
+                let logged_in = req.contains("cookie: sess1=abc");
+                let has_id = req.contains("x-auctioneer-wa-id: uu-7");
+                let body = match route.as_str() {
+                    "/api/user" if logged_in => r#"{"uid":"7","uuid":"uu-7","profile":{"first_name":"Kim","last_name":""},"buying":{"lots":1,"total":"£45.00"}}"#.to_string(),
+                    "/api/user" => r#"{"uid":"0","uuid":"0"}"#.to_string(),
+                    "/api/auction/open/7" if logged_in && has_id => r#"{"data":{"5000108":{"5320418":{"userBid":{"amount":"4500"},"proxyBid":{"maxAmount":"6000"},"isWinning":true,"metReserve":true}}}}"#.to_string(),
+                    "/api/bookmarks/7" if logged_in && has_id => r#"{"commerce_product_variation":{"items":{"5322396":{"status":"1","auction":"5000108"},"999":{"status":"1","auction":"5000108"}}}}"#.to_string(),
+                    "/user/7/buying" | "/user/7/buying/outbid" | "/user/7/buying/watchlist" if logged_in => LISTING.to_string(),
+                    _ => String::new(),
+                };
+                let status = if body.is_empty() { "403 Forbidden" } else { "200 OK" };
+                let resp = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = sock.write_all(resp.as_bytes()).await;
+            });
+        }
+    });
+
+    let svc = Service::with_db(Db::open_in_memory().unwrap(), &base).unwrap();
+    svc.set_gaps_unchecked(Duration::from_millis(1), Duration::from_millis(1));
+    assert!(svc.sync_account().await.is_err(), "no session yet");
+
+    svc.set_session(Some("SESS1=abc".into()));
+    let s = svc.sync_account().await.unwrap();
+    assert_eq!((s.account.uid, s.account.name.as_str()), (7, "Kim"));
+    assert_eq!((s.bids.len(), s.bookmarks, s.imported), (1, 2, 2));
+    assert_eq!(s.missing, vec![999]);
+
+    let w = svc.watchlist().unwrap();
+    let bid = w.iter().find(|l| l.lot.entity_id == Some(5320418)).unwrap();
+    assert!(bid.participating);
+    assert_eq!(bid.my_max_gbp, Some(60.0));
+    let mark = w.iter().find(|l| l.lot.entity_id == Some(5322396)).unwrap();
+    assert!(!mark.participating);
+    assert!(reqs.lock().unwrap().iter().all(|r| !r.starts_with("post") && !r.starts_with("patch")), "GET only");
+
+    // Expired site session: logged out in the app, no account kept.
+    svc.set_session(Some("other=1".into()));
+    assert!(svc.sync_account().await.is_err());
+    assert!(svc.account().is_none());
+}

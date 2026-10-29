@@ -39,6 +39,8 @@ pub struct WaClient {
     base: String,
     page_limiter: Limiter,
     api_limiter: Limiter,
+    /// `Cookie` header of the user's site login (from the app's login webview). Sent only to `base`.
+    session: StdMutex<Option<String>>,
 }
 
 fn build_http(user_agent: &str) -> reqwest::Client {
@@ -57,6 +59,7 @@ impl WaClient {
             base: base.trim_end_matches('/').to_string(),
             page_limiter: Limiter::new(page_gap),
             api_limiter: Limiter::new(api_gap),
+            session: StdMutex::new(None),
         }
     }
 
@@ -70,13 +73,35 @@ impl WaClient {
         self.api_limiter.set_gap(api_gap);
     }
 
+    pub fn set_session(&self, cookie: Option<String>) {
+        *self.session.lock().unwrap() = cookie.filter(|c| !c.is_empty());
+    }
+
+    pub fn has_session(&self) -> bool {
+        self.session.lock().unwrap().is_some()
+    }
+
     fn http(&self) -> reqwest::Client {
         self.http.lock().unwrap().clone()
     }
 
     async fn get(&self, path_or_url: &str, query: &[(String, String)], accept: &str) -> Result<String> {
+        self.get_with(path_or_url, query, accept, None).await
+    }
+
+    async fn get_with(&self, path_or_url: &str, query: &[(String, String)], accept: &str, wa_id: Option<&str>) -> Result<String> {
         let url = if path_or_url.starts_with("http") { path_or_url.to_string() } else { format!("{}{}", self.base, path_or_url) };
-        let resp = self.http().get(&url).query(query).header(reqwest::header::ACCEPT, accept).send().await?;
+        let mut req = self.http().get(&url).query(query).header(reqwest::header::ACCEPT, accept);
+        // The login cookie never leaves the site (the exchange-rate API goes through here too).
+        if url.starts_with(&format!("{}/", self.base)) {
+            if let Some(c) = self.session.lock().unwrap().clone() {
+                req = req.header(reqwest::header::COOKIE, c);
+            }
+            if let Some(id) = wa_id {
+                req = req.header("X-Auctioneer-Wa-Id", id);
+            }
+        }
+        let resp = req.send().await?;
         let status = resp.status();
         let final_url = resp.url().to_string();
         let body = resp.text().await?;
@@ -125,6 +150,20 @@ impl WaClient {
         self.api_limiter.wait().await;
         let body = self.get(&format!("/api/lot/{auction_id}/{entity_id}"), &[], "application/json").await?;
         parse::parse_lot_price(&body, auction_id, entity_id, now_unix())
+    }
+
+    /// Logged-in JSON API (`/api/user`, `/api/bookmarks/{uid}`, `/api/auction/open/{uid}`). GET only.
+    pub async fn fetch_account_json(&self, path: &str, wa_id: Option<&str>) -> Result<serde_json::Value> {
+        self.api_limiter.wait().await;
+        let body = self.get_with(path, &[], "application/json", wa_id).await?;
+        Ok(serde_json::from_str(&body)?)
+    }
+
+    /// Logged-in lot list page such as `/user/{uid}/buying/watchlist?page=N`, parsed like an auction listing.
+    pub async fn fetch_user_listing(&self, path: &str, page: u32) -> Result<ListingPage> {
+        let query = if page > 0 { vec![("page".to_string(), page.to_string())] } else { vec![] };
+        let html = self.get_page(path, &query).await?;
+        Ok(parse::parse_listing(&html, &self.base))
     }
 
     /// Raw GET without rate limiting (exchange-rate API etc.).

@@ -1,5 +1,6 @@
 //! Application service used by the Tauri commands and the CLI.
 
+use crate::account::{self, Account, MyBid};
 use crate::client::{WaClient, DEFAULT_BASE};
 use crate::db::{AuctionRow, Db, Preset, PresetRun};
 use crate::fx::{self, FxRecord};
@@ -80,10 +81,25 @@ pub struct BasketResult {
     pub items: Vec<CalcItem>,
 }
 
+/// Result of reading the user's site account into the local watchlist.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountSync {
+    pub account: Account,
+    pub bids: Vec<MyBid>,
+    pub bookmarks: usize,
+    /// Lots added to or updated in the local watchlist.
+    pub imported: usize,
+    /// Entity ids the site returned but no lot page here describes (title, size unknown).
+    pub missing: Vec<i64>,
+    pub synced_at: i64,
+}
+
 pub struct Service {
     pub db: Db,
     client: WaClient,
     settings: RwLock<Settings>,
+    account: RwLock<Option<AccountSync>>,
 }
 
 fn secs(s: f64) -> Duration {
@@ -98,7 +114,7 @@ impl Service {
     pub fn with_db(db: Db, base_url: &str) -> Result<Self> {
         let settings = db.load_settings()?;
         let client = WaClient::new(base_url, &settings.user_agent, secs(settings.page_gap_secs), secs(settings.api_gap_secs));
-        Ok(Self { db, client, settings: RwLock::new(settings) })
+        Ok(Self { db, client, settings: RwLock::new(settings), account: RwLock::new(None) })
     }
 
     pub fn settings(&self) -> Settings {
@@ -313,6 +329,82 @@ impl Service {
         }
         let (run, _) = self.db.preset_cached(id, &slug)?;
         Ok(PresetResult { lots: self.db.views_for_skus(&skus)?, preset, slug, run, is_active })
+    }
+
+    // ---------- site account ----------
+
+    /// `Cookie` header from the app's login webview; `None` logs out of the app (the site session is untouched).
+    pub fn set_session(&self, cookie: Option<String>) {
+        if cookie.is_none() {
+            *self.account.write().unwrap() = None;
+        }
+        self.client.set_session(cookie);
+    }
+
+    pub fn account(&self) -> Option<AccountSync> {
+        self.account.read().unwrap().clone()
+    }
+
+    /// Reads the user's open bids and site watchlist (GET only) and folds them into the local watchlist:
+    /// every watched or bid lot is watched here, winning bids become "participating", bid lots get the site's max bid as my max,
+    /// so the watchlist basket shows the Korea landed cost without manual entry.
+    pub async fn sync_account(&self) -> Result<AccountSync> {
+        if !self.client.has_session() {
+            return Err(Error::other("로그인되어 있지 않습니다. 설정에서 Whisky Auctioneer에 로그인하세요."));
+        }
+        let user = self.client.fetch_account_json("/api/user", None).await?;
+        let Some(acc) = account::parse_user(&user) else {
+            self.set_session(None);
+            return Err(Error::other("사이트 로그인이 만료됐습니다. 다시 로그인하세요."));
+        };
+        let wa_id = Some(acc.uuid.as_str());
+        let bids = account::parse_open_bids(&self.client.fetch_account_json(&format!("/api/auction/open/{}", acc.uid), wa_id).await?);
+        let marks = account::parse_bookmarks(&self.client.fetch_account_json(&format!("/api/bookmarks/{}", acc.uid), wa_id).await?);
+
+        // Only open-auction bookmarks matter for cost; closed ones stay on the site.
+        let active = self.cached_overview()?.active.map(|a| a.auction_id);
+        let marks: Vec<_> = marks.into_iter().filter(|m| active.is_none() || m.auction_id.is_none() || m.auction_id == active).collect();
+
+        let wanted: Vec<i64> = bids.iter().map(|b| b.entity_id).chain(marks.iter().map(|m| m.entity_id)).collect();
+        let unknown = |svc: &Self| wanted.iter().any(|e| svc.db.sku_for_entity(*e).ok().flatten().is_none());
+        // Lot details (title, size, bottles) come from the user's own lot pages, parsed like a listing
+        // (checked 2026-10-29: same `.lot-teaser`/`.bid-app-main` markup, 32 per page, `?page=N`).
+        // Winning bids are on /buying, outbid ones on /buying/outbid. Pages are fetched only while lots are still unknown.
+        let max_pages = self.settings().max_pages_per_run.max(1);
+        'paths: for path in ["buying", "buying/outbid", "buying/watchlist"] {
+            for page in 0..max_pages {
+                if !unknown(self) {
+                    break 'paths;
+                }
+                let Ok(listing) = self.client.fetch_user_listing(&format!("/user/{}/{path}", acc.uid), page).await else { break };
+                self.db.upsert_lots(&listing.lots, None)?;
+                if listing.lots.len() < 32 {
+                    break;
+                }
+            }
+        }
+
+        let mut imported = 0;
+        let mut missing = Vec::new();
+        for e in &wanted {
+            let Some(sku) = self.db.sku_for_entity(*e)? else {
+                if !missing.contains(e) {
+                    missing.push(*e);
+                }
+                continue;
+            };
+            self.db.watch_add(&sku)?;
+            if let Some(b) = bids.iter().find(|b| b.entity_id == *e) {
+                let note = self.db.views_for_skus(std::slice::from_ref(&sku))?.into_iter().next().and_then(|v| v.note);
+                let max = b.max_pence.or(b.bid_pence).map(|p| p as f64 / 100.0);
+                // Only lots I'm currently winning count toward what I'd pay; outbid ones keep my max for reference.
+                self.db.watch_update(&sku, b.winning, max, note.as_deref())?;
+            }
+            imported += 1;
+        }
+        let out = AccountSync { account: acc, bookmarks: marks.len(), bids, imported, missing, synced_at: now_unix() };
+        *self.account.write().unwrap() = Some(out.clone());
+        Ok(out)
     }
 
     // ---------- watchlist ----------

@@ -368,10 +368,11 @@ a.btn, a.icon-btn { text-decoration: none; }
 .split > .filters { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; padding: 18px; border-radius: var(--r-panel); background: var(--surface); }
 .filters .disclosure { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--hair); }
 .filters .disclosure > summary { margin-bottom: 0; }
-.filters .disclosure input { width: 100%; }
+.filters .disclosure input:not([type="checkbox"]) { width: 100%; }
 .stack-form { display: flex; flex-direction: column; gap: 10px; }
 .stack-form input:not([type="checkbox"]) { width: 100%; }
 .stack-form .btn { align-self: flex-start; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .facets { display: flex; flex-direction: column; }
 .facets-total { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding-bottom: 10px; color: var(--ink-2); }
 .facets-total b { font-family: var(--num); font-variation-settings: "SOFT" 100; font-size: 22px; font-weight: 600; color: var(--ink); margin-right: 2px; }

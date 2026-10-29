@@ -206,7 +206,7 @@ export function PresetsPage({ overview, reloadKey }: { overview: AuctionOverview
             </>
           ) : (
             <div className="empty-state">
-              <p>왼쪽에서 프리셋을 고르세요.</p>
+              <p>{size === "wide" ? "왼쪽에서" : "위에서"} 프리셋을 고르세요.</p>
               <p className="hint">처음 열 때 한 번 사이트에서 전체 페이지를 수집하고, 그다음부터는 저장해 둔 lot 목록을 바로 보여줍니다.</p>
             </div>
           )}

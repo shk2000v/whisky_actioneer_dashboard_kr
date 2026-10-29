@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageHead } from "../components/PageHead";
 import { setZone, useZone, ZONES, type Zone } from "../time";
-import { api, errMsg, type PollMode, type Settings } from "../api";
+import { listen } from "@tauri-apps/api/event";
+import { api, errMsg, isTauri, type AccountSync, type PollMode, type Settings } from "../api";
+import { dateTime, gbp } from "../format";
 
 const DEFAULT_MODES: Record<PollMode["mode"], PollMode> = {
   adaptive: { mode: "adaptive", normalMinutes: 30, finalWindowMinutes: 120, finalMinutes: 2 },
@@ -25,6 +27,100 @@ function ZoneSetting() {
         ))}
       </fieldset>
       <p className="hint">마감 시각, 그래프, 조회 시각에 모두 적용되고 바로 저장됩니다. 상단 경매 정보의 작은 한국·영국 버튼과 같은 설정입니다.</p>
+    </section>
+  );
+}
+
+/** Site login: the site's own login page opens in an app window; the app never sees the password. */
+function AccountSetting({ onSynced }: { onSynced: () => void }) {
+  const [acc, setAcc] = useState<AccountSync | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // App re-renders every second (countdown), so the callback identity changes; keep listeners stable.
+  const synced = useRef(onSynced);
+  synced.current = onSynced;
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    api.account().then(setAcc).catch(() => {});
+    const un = [
+      listen<AccountSync | null>("account", (e) => {
+        setAcc(e.payload);
+        setBusy(false);
+        setError(null);
+        synced.current();
+      }),
+      listen<string>("account-error", (e) => {
+        setError(e.payload);
+        setBusy(false);
+      }),
+      listen("account-syncing", () => {
+        setError(null);
+        setBusy(true);
+      }),
+    ];
+    return () => un.forEach((p) => p.then((f) => f()));
+  }, []);
+
+  const run = async (f: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await f();
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!isTauri()) {
+    return (
+      <section>
+        <h2 className="section-title">Whisky Auctioneer 계정</h2>
+        <p className="hint">사이트 로그인은 데스크톱 앱에서만 됩니다.</p>
+      </section>
+    );
+  }
+
+  const winning = acc?.bids.filter((b) => b.winning).length ?? 0;
+  return (
+    <section aria-busy={busy}>
+      <h2 className="section-title">Whisky Auctioneer 계정</h2>
+      {error && <div className="notice is-error" role="alert">{error}</div>}
+      {busy && <p className="hint" role="status">사이트에서 내 입찰과 관심 목록을 읽는 중입니다. 처음에는 lot 정보 페이지를 10초 간격으로 읽어서 1분 정도 걸릴 수 있습니다.</p>}
+      {acc ? (
+        <>
+          <p>
+            <b>{acc.account.name || `회원 ${acc.account.uid}`}</b> 로그인됨. 진행 중 입찰 {acc.bids.length}건(최고가 {winning}건), 사이트 관심 목록 {acc.bookmarks}건을 관심 목록에 넣었습니다.
+          </p>
+          {acc.bids.length > 0 && (
+            <ul className="hint">
+              {acc.bids.map((b) => (
+                <li key={b.entityId}>
+                  lot {b.entityId}: 내 입찰 {gbp(b.bidPence)}, 최대 {gbp(b.maxPence)} · {b.winning ? "최고가" : "추월당함"}
+                  {b.winning && !b.metReserve && " · reserve 미달"}
+                </li>
+              ))}
+            </ul>
+          )}
+          {acc.missing.length > 0 && (
+            <p className="hint">상품 정보를 찾지 못한 lot {acc.missing.length}건({acc.missing.join(", ")})은 관심 목록에 넣지 못했습니다. 검색이나 프리셋으로 한 번 수집하면 다음 동기화 때 들어갑니다.</p>
+          )}
+          <p className="hint">최고가인 입찰은 「참여」로 표시하고, 입찰한 lot에는 사이트의 최대 입찰가를 「내 최대가」로 넣어 관심 목록에서 한국 도착 비용이 바로 계산됩니다. 마지막 동기화 {dateTime(acc.syncedAt)}.</p>
+          <div className="btn-row">
+            <button className="btn btn-primary" disabled={busy} onClick={() => run(async () => { setAcc(await api.syncAccount()); synced.current(); })}>다시 불러오기</button>
+            <button className="btn btn-quiet" disabled={busy} onClick={() => run(async () => { await api.logout(); setAcc(null); })}>로그아웃</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="hint">사이트 로그인 창이 열립니다. 비밀번호는 그 창(사이트)에 직접 입력하며 앱은 비밀번호를 받거나 저장하지 않습니다. 로그인하면 진행 중 입찰과 사이트 관심 목록을 읽기만 합니다. 입찰이나 관심 목록 변경은 하지 않습니다.</p>
+          <div className="btn-row">
+            <button className="btn btn-primary" disabled={busy} onClick={() => run(api.loginOpen)}>로그인</button>
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -61,6 +157,7 @@ export function SettingsPage({ onSaved }: { onSaved: () => void }) {
       <PageHead title="설정" />
       {error && <div className="notice is-error" role="alert">{error}</div>}
       {msg && <div className="notice is-ok" role="status">{msg}</div>}
+      <AccountSetting onSynced={onSaved} />
       <ZoneSetting />
       <section>
         <h2 className="section-title">관심 목록 가격 갱신</h2>

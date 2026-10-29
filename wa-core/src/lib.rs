@@ -6,6 +6,7 @@
 //! - Facet JSON: `/api/facets?view_name=lots_index&view_display_id=lots_page&view_args={auction_id}`
 //! - Auction index HTML: `/whisky-auctions`
 
+pub mod account;
 pub mod client;
 pub mod db;
 pub mod error;

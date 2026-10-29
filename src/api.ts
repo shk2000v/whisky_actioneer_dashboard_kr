@@ -221,6 +221,33 @@ export interface PollerStatus {
   error: string | null;
 }
 
+/** The user's own Whisky Auctioneer account (wa-core/src/account.rs). */
+export interface Account {
+  uid: number;
+  uuid: string;
+  name: string;
+  buyingLots: number;
+  buyingTotal: string;
+}
+
+export interface MyBid {
+  auctionId: number;
+  entityId: number;
+  bidPence: number | null;
+  maxPence: number | null;
+  winning: boolean;
+  metReserve: boolean;
+}
+
+export interface AccountSync {
+  account: Account;
+  bids: MyBid[];
+  bookmarks: number;
+  imported: number;
+  missing: number[];
+  syncedAt: number;
+}
+
 // ---- constants verified on the site (sort select / items_per_page select) ----
 
 export const SORT_OPTIONS: [string, string][] = [
@@ -280,6 +307,11 @@ export const api = {
     call<{ result: CalcResult; fx: FxRecord }>("calculate", { items, overrides }),
   calculateEach: (items: CalcItem[]) => call<{ results: CalcResult[]; fx: FxRecord }>("calculate_each", { items }),
   basket: () => call<BasketResult>("basket"),
+  account: () => call<AccountSync | null>("get_account"),
+  syncAccount: () => call<AccountSync>("sync_account"),
+  /** Opens the site's login page in an app window (desktop only); the password is typed on the site. */
+  loginOpen: () => invoke<void>("login_open"),
+  logout: () => invoke<void>("logout"),
   settings: () => call<Settings>("get_settings"),
   saveSettings: (settings: Settings) => call<Settings>("save_settings", { settings }),
 };

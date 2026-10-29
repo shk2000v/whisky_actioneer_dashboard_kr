@@ -213,6 +213,11 @@ pub async fn dispatch(svc: &Service, cmd: &str, a: Value) -> Result<Outcome> {
             ok(json!({ "results": results, "fx": fx }))
         }
         "basket" => ok(svc.basket().await?),
+        "get_account" => ok(svc.account()),
+        "sync_account" => {
+            wake = true;
+            ok(svc.sync_account().await?)
+        }
         "get_settings" => ok(svc.settings()),
         "save_settings" => {
             let r: SettingsArg = args(a)?;
