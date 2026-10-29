@@ -1,0 +1,30 @@
+# Builds an unsigned macOS app on GitHub's macOS runner.
+# Run it from the Actions tab ("Run workflow"); download the dmg from the run's artifacts.
+name: build-mac
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14   # Apple Silicon
+            arch: aarch64
+          - runner: macos-13   # Intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci --no-audit --no-fund
+      - run: cargo test -p wa-core
+      - run: npx tauri build --bundles app,dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whisky-tracker-${{ matrix.arch }}
+          path: target/release/bundle/dmg/*.dmg
