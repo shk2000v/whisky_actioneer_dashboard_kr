@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { api, errMsg, type CalcItem, type CalcResult, type FxRecord, type TaxSettings } from "../api";
 import { CalcBreakdown } from "../components/CalcBreakdown";
 import { Icon } from "../components/Icon";
 import { PageHead } from "../components/PageHead";
-import { dateTime } from "../format";
+import { dateTime, effectivePounds } from "../format";
+import { useMyBids } from "../myBids";
 
 export function CalculatorPage({ fx, onFx }: { fx: FxRecord | null; onFx: (f: FxRecord) => void }) {
   const [items, setItems] = useState<CalcItem[]>([{ hammerGbp: 20, bottles: 1, volumeMl: 700 }]);
@@ -11,6 +12,22 @@ export function CalculatorPage({ fx, onFx }: { fx: FxRecord | null; onFx: (f: Fx
   const [result, setResult] = useState<CalcResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [manual, setManual] = useState({ krw: "", usd: "" });
+  const [note, setNote] = useState<string | null>(null);
+  const bids = useMyBids();
+  const winning = [...bids.values()].filter((b) => b.winning);
+
+  // If the auction closed now: each lot I'm winning at its current bid (what I'd pay as hammer).
+  const fillFromWins = async () => {
+    try {
+      const ids = new Set(winning.map((b) => b.entityId));
+      const lots = (await api.watchlist()).filter((l) => l.entityId != null && ids.has(l.entityId));
+      if (lots.length === 0) return setNote("최고가 입찰 lot의 상품 정보가 관심 목록에 없습니다. 설정에서 계정을 다시 불러오세요.");
+      setItems(lots.map((l) => ({ label: l.title, hammerGbp: effectivePounds(l), bottles: l.bottles ?? 1, volumeMl: l.volumeMl ?? 700 })));
+      setNote(`최고가 입찰 ${lots.length}건을 현재가 기준으로 담았습니다.${lots.length < winning.length ? ` ${winning.length - lots.length}건은 상품 정보가 없어 빠졌습니다.` : ""}`);
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  };
 
   useEffect(() => {
     api.settings().then((s) => setTax(s.tax)).catch((e) => setError(errMsg(e)));
@@ -39,6 +56,12 @@ export function CalculatorPage({ fx, onFx }: { fx: FxRecord | null; onFx: (f: Fx
       <div className="calc-layout">
           <section className="calc-items" aria-labelledby="items-title">
             <h2 id="items-title" className="section-title">한 상자에 담을 술</h2>
+            {winning.length > 0 && (
+              <div className="btn-row">
+                <button className="btn btn-primary" onClick={fillFromWins}>내 최고가 입찰 {winning.length}건으로 계산</button>
+              </div>
+            )}
+            {note && <p className="hint" role="status">{note}</p>}
             <table className="item-table">
               <thead>
                 <tr>
@@ -50,7 +73,13 @@ export function CalculatorPage({ fx, onFx }: { fx: FxRecord | null; onFx: (f: Fx
               </thead>
               <tbody>
                 {items.map((it, i) => (
-                  <tr key={i}>
+                  <Fragment key={i}>
+                  {it.label && (
+                    <tr className="item-label-row">
+                      <td colSpan={4}>{it.label}</td>
+                    </tr>
+                  )}
+                  <tr>
                     <td><span className="input-affix"><i aria-hidden="true">£</i><input aria-label="낙찰가" type="number" inputMode="decimal" min={0} step={1} value={it.hammerGbp} onChange={(e) => setItem(i, { hammerGbp: num(e.target.value) })} /></span></td>
                     <td><input aria-label="병 수" type="number" min={1} step={1} value={it.bottles} onChange={(e) => setItem(i, { bottles: Math.max(1, num(e.target.value)) })} /></td>
                     <td><span className="input-affix"><input aria-label="병당 용량" type="number" min={1} step={10} value={it.volumeMl} onChange={(e) => setItem(i, { volumeMl: num(e.target.value) })} /><i aria-hidden="true">ml</i></span></td>
@@ -62,6 +91,7 @@ export function CalculatorPage({ fx, onFx }: { fx: FxRecord | null; onFx: (f: Fx
                       )}
                     </td>
                   </tr>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

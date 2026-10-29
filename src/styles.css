@@ -588,4 +588,7 @@ table.lots tbody tr:hover td { background: color-mix(in srgb, var(--surface-2) 5
 .demo-note { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 10px 16px; margin-bottom: 16px; border-radius: 16px; background: var(--heather-soft); color: var(--ink-2); font-size: 13px; }
 .demo-note b { color: var(--heather); }
 .demo-example { margin: -4px 0 8px; font-size: 13px; color: var(--ink-2); flex-wrap: wrap; }
-.warn-pill { background: color-mix(in srgb, var(--warn) 14%, var(--surface)); color: var(--warn); font-weight: 600; }
+.pill.good-pill { background: color-mix(in srgb, var(--good) 14%, var(--surface)); color: var(--good); font-weight: 600; }
+.my-bid-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; color: var(--ink-2); }
+.item-label-row td { padding-top: 8px; padding-bottom: 0; color: var(--ink-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 0; }
+.pill.warn-pill { background: color-mix(in srgb, var(--warn) 14%, var(--surface)); color: var(--warn); font-weight: 600; }

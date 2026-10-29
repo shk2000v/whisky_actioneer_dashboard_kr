@@ -9,8 +9,10 @@ import { PageHead } from "../components/PageHead";
 import { PriceChart } from "../components/PriceChart";
 import { changeSinceFirst, duration, effectivePounds, gbp, krw, reserveState, timeAgo } from "../format";
 import { Sheet, useSize } from "../layout";
+import { bidLabel, useMyBids } from "../myBids";
+import type { MyBid } from "../api";
 
-type Scope = "all" | "participating" | "noOutliers";
+type Scope = "all" | "participating" | "winning" | "noOutliers";
 
 /** Lots priced over 10x the median dwarf everything else on a shared zero-based scale. */
 function outlierCut(lots: LotView[]) {
@@ -26,7 +28,9 @@ function LotDetail({
   onUpdate,
   onRemove,
   headingLevel,
+  bid,
 }: {
+  bid?: MyBid;
   lot: LotView;
   overview: AuctionOverview | null;
   onUpdate: (l: LotView, patch: Partial<Pick<LotView, "participating" | "myMaxGbp" | "note">>) => void;
@@ -89,6 +93,12 @@ function LotDetail({
           <div><dt>reserve</dt><dd className={`reserve-${reserve.tone}`}>{reserve.label}</dd></div>
         </dl>
         {lot.price && <p className="hint">{timeAgo(lot.price.fetchedAt)} 조회</p>}
+        {bid && (
+          <p className="my-bid-line">
+            <span className={`pill ${bid.winning ? "good-pill" : "warn-pill"}`}>{bidLabel(bid)}</span>
+            사이트 내 입찰 {gbp(bid.bidPence)}, 최대 {gbp(bid.maxPence)}
+          </p>
+        )}
       </div>
 
       <section className="detail-section">
@@ -188,6 +198,8 @@ export function WatchlistPage({
   const [busy, setBusy] = useState(false);
   const [announce, setAnnounce] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const bids = useMyBids(reloadKey);
+  const isWinning = (l: LotView) => l.entityId != null && !!bids.get(l.entityId)?.winning;
 
   const load = async () => {
     try {
@@ -208,9 +220,11 @@ export function WatchlistPage({
   const cut = useMemo(() => outlierCut(lots), [lots]);
   const shown = useMemo(() => {
     if (scope === "participating") return lots.filter((l) => l.participating);
+    if (scope === "winning") return lots.filter(isWinning);
     if (scope === "noOutliers" && cut != null) return lots.filter((l) => effectivePounds(l) <= cut);
     return lots;
-  }, [lots, scope, cut]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lots, scope, cut, bids]);
   const lot = lots.find((l) => l.sku === selected) ?? null;
 
   const update = async (l: LotView, patch: Partial<Pick<LotView, "participating" | "myMaxGbp" | "note">>) => {
@@ -279,6 +293,8 @@ export function WatchlistPage({
     ["all", `전체 ${lots.length}`],
     ["participating", `참여 중 ${lots.filter((l) => l.participating).length}`],
   ];
+  const winningCount = lots.filter(isWinning).length;
+  if (winningCount > 0) scopes.push(["winning", `최고가 입찰 ${winningCount}`]);
   if (cut != null) scopes.push(["noOutliers", `£${Math.round(cut).toLocaleString()} 이하`]);
 
   return (
@@ -306,7 +322,7 @@ export function WatchlistPage({
             </div>
           </div>
           {shown.length > 0 ? (
-            <CompareBars lots={shown} selected={size === "wide" ? selected : null} onSelect={select} />
+            <CompareBars lots={shown} selected={size === "wide" ? selected : null} onSelect={select} bids={bids} />
           ) : (
             <p className="hint">참여 중으로 표시한 lot이 없습니다. lot을 고른 뒤 "입찰 참여 중"을 켜세요.</p>
           )}
@@ -338,14 +354,14 @@ export function WatchlistPage({
 
         {size === "wide" && lot && (
           <section className="panel watch-detail" aria-label="고른 lot">
-            <LotDetail lot={lot} overview={overview} onUpdate={update} onRemove={remove} headingLevel="h2" />
+            <LotDetail lot={lot} overview={overview} onUpdate={update} onRemove={remove} headingLevel="h2" bid={lot.entityId != null ? bids.get(lot.entityId) : undefined} />
           </section>
         )}
       </div>
 
       {size !== "wide" && (
         <Sheet open={sheetOpen && !!lot} onClose={() => setSheetOpen(false)} title={lot?.title ?? ""}>
-          {lot && <LotDetail lot={lot} overview={overview} onUpdate={update} onRemove={remove} headingLevel="none" />}
+          {lot && <LotDetail lot={lot} overview={overview} onUpdate={update} onRemove={remove} headingLevel="none" bid={lot.entityId != null ? bids.get(lot.entityId) : undefined} />}
         </Sheet>
       )}
     </div>

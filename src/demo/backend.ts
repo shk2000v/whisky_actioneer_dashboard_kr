@@ -399,7 +399,7 @@ export async function dispatch(cmd: string, a: Args): Promise<unknown> {
       save("settings", a.settings);
       return settings();
     case "get_account":
-      return null;
+      return load("account", null);
     case "sync_account":
       throw "웹 테스트판에서는 사이트에 로그인할 수 없습니다. 데스크톱 앱에서 사용하세요.";
     default:

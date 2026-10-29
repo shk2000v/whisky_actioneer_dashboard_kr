@@ -1,4 +1,5 @@
-import type { LotView, ProductAuctionPoint } from "../api";
+import type { LotView, MyBid, ProductAuctionPoint } from "../api";
+import { bidLabel } from "../myBids";
 import { effectivePounds } from "../format";
 
 function niceTop(max: number) {
@@ -16,7 +17,7 @@ const tickMoney = (v: number) => (v >= 1000 ? `£${v / 1000}k` : `£${v}`);
  * the horizontal axis (shared, zero-based). Each row is a button that selects the lot.
  * My max bid = dark tick, reserve = violet tick, both only when they fall inside the scale.
  */
-export function CompareBars({ lots, selected, onSelect }: { lots: LotView[]; selected: string | null; onSelect: (sku: string) => void }) {
+export function CompareBars({ lots, selected, onSelect, bids }: { lots: LotView[]; selected: string | null; onSelect: (sku: string) => void; bids?: Map<number, MyBid> }) {
   const rows = lots
     .map((l) => ({
       lot: l,
@@ -60,7 +61,11 @@ export function CompareBars({ lots, selected, onSelect }: { lots: LotView[]; sel
                   <span className="bar-meta">
                     {lot.size && <span>{lot.size}</span>}
                     {lot.location && <span>{lot.location}</span>}
-                    {lot.participating && <span className="pill">참여 중</span>}
+                    {(() => {
+                      const b = lot.entityId != null ? bids?.get(lot.entityId) : undefined;
+                      if (b) return <span className={`pill ${b.winning ? "good-pill" : "warn-pill"}`}>{bidLabel(b)}</span>;
+                      return lot.participating && <span className="pill">참여 중</span>;
+                    })()}
                   </span>
                 </span>
                 <span className="sr-only">{spoken}</span>
